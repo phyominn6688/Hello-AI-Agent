@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+*.egg
+
+# Coverage
+coverage/
+.nyc_output/
+
+# CDK
+travel-agent-infra/cdk.out/
+
+# Misc
+.DS_Store
+*.log
+*.tsbuildinfo
+.cache/

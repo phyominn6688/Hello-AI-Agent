@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground: #0f172a;
+  --background: #f8fafc;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* SSE typing cursor */
+.typing-cursor::after {
+  content: "▋";
+  animation: blink 1s step-start infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Custom scrollbar for chat */
+.chat-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 2px;
+}
+
+/* Markdown rendering in assistant messages */
+.prose-chat h1, .prose-chat h2, .prose-chat h3 {
+  @apply font-semibold text-slate-800 mt-3 mb-1;
+}
+.prose-chat h1 { @apply text-lg; }
+.prose-chat h2 { @apply text-base; }
+.prose-chat h3 { @apply text-sm; }
+.prose-chat p { @apply mb-2 last:mb-0; }
+.prose-chat ul, .prose-chat ol { @apply pl-4 mb-2 space-y-1; }
+.prose-chat ul { @apply list-disc; }
+.prose-chat ol { @apply list-decimal; }
+.prose-chat strong { @apply font-semibold; }
+.prose-chat code { @apply font-mono text-xs bg-slate-100 px-1 rounded; }
+.prose-chat a { @apply text-blue-600 underline; }
+.prose-chat hr { @apply border-slate-200 my-3; }

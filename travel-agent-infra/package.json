@@ -1,0 +1,24 @@
+{
+  "name": "travel-agent-infra",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy:dev": "cdk deploy --all --context env=dev",
+    "deploy:prod": "cdk deploy --all --context env=prod",
+    "diff": "cdk diff --all",
+    "synth": "cdk synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.170.0",
+    "constructs": "^10.0.0"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.170.0",
+    "typescript": "~5.7.2",
+    "@types/node": "^22.10.1",
+    "ts-node": "^10.9.2"
+  }
+}

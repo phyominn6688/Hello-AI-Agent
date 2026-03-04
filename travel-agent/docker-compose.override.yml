@@ -1,0 +1,36 @@
+# Development overrides — additional debugging tooling and seed data
+version: "3.9"
+
+services:
+  backend:
+    environment:
+      # Verbose SQL logging in dev
+      SQLALCHEMY_ECHO: "true"
+    # Override to expose debug port
+    ports:
+      - "8000:8000"
+      - "5678:5678"  # debugpy
+
+  # pgAdmin for DB inspection
+  pgadmin:
+    image: dpage/pgadmin4:8
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: dev@localhost
+      PGADMIN_DEFAULT_PASSWORD: dev
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+
+  # Redis Insight for cache inspection
+  redis-insight:
+    image: redis/redisinsight:2.58
+    ports:
+      - "5540:5540"
+    depends_on:
+      - redis
+
+volumes:
+  pgadmin_data:
