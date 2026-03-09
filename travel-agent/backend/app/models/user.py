@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Date, DateTime, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,12 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(256))
     avatar: Mapped[str | None] = mapped_column(Text)
     passport_country: Mapped[str | None] = mapped_column(String(3))  # ISO-3166 alpha-3
+
+    # Age verification — self-declared; declaration_method tracks assurance level
+    date_of_birth: Mapped[date | None] = mapped_column(Date)
+    age_declaration_method: Mapped[str | None] = mapped_column(
+        String(32)
+    )  # "self_declared" — expand in future iterations
 
     # {"dietary": ["vegetarian"], "mobility": "wheelchair", "interests": ["hiking"]}
     preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
