@@ -4,11 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeftIcon } from "lucide-react";
-import { getConversation, getItinerary, getTrip, streamChat } from "@/lib/api";
+import {
+  getConversation,
+  getItinerary,
+  getTrip,
+  postLocation,
+  streamChat,
+} from "@/lib/api";
 import type { ChatMessage, ItineraryDay, Trip } from "@/types";
 import ChatWindow from "@/components/ChatWindow";
 import ItinerarySidebar from "@/components/ItinerarySidebar";
 import AlertBanner from "@/components/AlertBanner";
+import DayBriefing from "@/components/DayBriefing";
 
 export default function TripPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,12 +35,32 @@ export default function TripPage() {
       getTrip(tripId),
       getConversation(tripId),
       getItinerary(tripId),
-    ]).then(([t, conv, itin]) => {
-      setTrip(t);
-      setMessages(conv.messages);
-      setItinerary(itin);
-    }).catch(console.error);
+    ])
+      .then(([t, conv, itin]) => {
+        setTrip(t);
+        setMessages(conv.messages);
+        setItinerary(itin);
+      })
+      .catch(console.error);
   }, [tripId]);
+
+  // Geolocation — only for active trips
+  useEffect(() => {
+    if (trip?.status !== "active") return;
+    if (!navigator.geolocation) return;
+
+    const postLoc = (pos: GeolocationPosition) => {
+      postLocation(tripId, pos.coords.latitude, pos.coords.longitude).catch(() => {});
+    };
+
+    navigator.geolocation.getCurrentPosition(postLoc, () => {});
+
+    const interval = setInterval(() => {
+      navigator.geolocation.getCurrentPosition(postLoc, () => {});
+    }, 5 * 60 * 1000); // every 5 minutes
+
+    return () => clearInterval(interval);
+  }, [trip?.status, tripId]);
 
   const handleSend = async (text: string) => {
     if (streaming || !text.trim()) return;
@@ -46,10 +73,11 @@ export default function TripPage() {
     setMessages((prev) => [...prev, userMsg]);
     setStreaming(true);
 
-    // Start with empty assistant message that we'll stream into
-    const assistantMsgIndex = messages.length + 1;
     let assistantContent = "";
-    setMessages((prev) => [...prev, { role: "assistant", content: "", timestamp: new Date().toISOString() }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: "", timestamp: new Date().toISOString() },
+    ]);
 
     try {
       for await (const event of streamChat(tripId, text)) {
@@ -94,11 +122,17 @@ export default function TripPage() {
     );
   }
 
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayItinerary = itinerary.find((d) => d.date === todayStr) ?? null;
+
   return (
     <div className="flex flex-col h-screen bg-surface">
       {/* Top nav */}
       <header className="flex items-center gap-3 px-4 py-3 bg-white border-b border-slate-200 shrink-0">
-        <Link href="/" className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors">
+        <Link
+          href="/"
+          className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
+        >
           <ArrowLeftIcon className="w-4 h-4" />
         </Link>
         <div className="flex-1 min-w-0">
@@ -115,6 +149,13 @@ export default function TripPage() {
 
       {/* Alerts */}
       <AlertBanner tripId={tripId} />
+
+      {/* Day briefing — guide mode only */}
+      {trip.status === "active" && todayItinerary && (
+        <div className="px-4 py-3 border-b border-slate-200 bg-white shrink-0">
+          <DayBriefing day={todayItinerary} />
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">

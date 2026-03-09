@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.agent.mcp import (
     amadeus,
     calendar,
+    directions,
     opentable,
     ticketmaster,
     wallet,
@@ -56,8 +57,8 @@ PLANNING_TOOLS = (
     + tripdotcom.get_tools()
 )
 
-# Guide mode adds real-time tools (Iteration 2: get_directions, get_wait_times, etc.)
-GUIDE_TOOLS = PLANNING_TOOLS
+# Guide mode adds real-time location tools
+GUIDE_TOOLS = PLANNING_TOOLS + directions.get_tools()
 
 TOOL_DISPATCH = {
     # Amadeus
@@ -78,6 +79,10 @@ TOOL_DISPATCH = {
     "store_document": wallet,
     # Rail
     "search_rail": tripdotcom,
+    # Guide-mode directions
+    "get_directions": directions,
+    "search_nearby": directions,
+    "get_wait_times": directions,
 }
 
 
@@ -147,17 +152,42 @@ async def _build_system_prompt(trip: Trip, db: AsyncSession) -> str:
         todays_itin = result.scalar_one_or_none()
         items_summary = "No items scheduled yet."
         if todays_itin and todays_itin.items:
+            sorted_items = sorted(todays_itin.items, key=lambda x: x.start_time or "")
             items_summary = "\n".join(
                 f"- {item.start_time or '?'} {item.name} ({item.flexibility})"
-                for item in sorted(todays_itin.items, key=lambda x: x.start_time or "")
+                for item in sorted_items
             )
+            # Find next fixed event
+            now_time = datetime.now(timezone.utc).time()
+            upcoming_fixed = [
+                i for i in sorted_items
+                if i.flexibility == "fixed" and i.start_time and i.start_time >= now_time
+            ]
+            next_fixed = (
+                f"{upcoming_fixed[0].name} at {upcoming_fixed[0].start_time}"
+                if upcoming_fixed else "None today"
+            )
+        else:
+            next_fixed = "None"
+
+        # User GPS coordinates for directions and leave-now calculations
+        user_gps = "Unknown"
+        if user and user.current_lat and user.current_lng:
+            age_mins = "?"
+            if user.location_updated_at:
+                age_mins = int(
+                    (datetime.now(timezone.utc) - user.location_updated_at).total_seconds() / 60
+                )
+            user_gps = f"lat={user.current_lat:.5f}, lng={user.current_lng:.5f} (updated {age_mins} min ago)"
+
         return GUIDE_SYSTEM_PROMPT.format(
             trip_id=trip.id,
             today=today,
             current_location=destinations[0] if destinations else "Unknown",
             todays_itinerary=items_summary,
-            next_fixed_event="None",
+            next_fixed_event=next_fixed,
             weather_summary="(use get_weather tool for current conditions)",
+            user_gps=user_gps,
         )
     else:
         return PLANNING_SYSTEM_PROMPT.format(

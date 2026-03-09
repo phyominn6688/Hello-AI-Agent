@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat, itinerary, trips, users
+from app.api import chat, itinerary, location, trips, users
 from app.config import settings
 from app.db.database import init_db
 
@@ -66,6 +66,7 @@ app.include_router(trips.router, prefix="/api/v1", tags=["trips"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(itinerary.router, prefix="/api/v1", tags=["itinerary"])
 app.include_router(users.router, prefix="/api/v1", tags=["users"])
+app.include_router(location.router, prefix="/api/v1", tags=["location"])
 
 
 @app.get("/health", tags=["ops"])
