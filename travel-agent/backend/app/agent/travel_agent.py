@@ -34,16 +34,18 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
-def _get_client() -> anthropic.Anthropic:
-    if not settings.anthropic_api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Add it to your .env file or environment."
-        )
-    return anthropic.Anthropic(api_key=settings.anthropic_api_key)
+# ── Anthropic client singleton ─────────────────────────────────────────────────
+# Created once at module load; raises immediately if key is missing.
+
+if not settings.anthropic_api_key:
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY is not set. Add it to your .env file or environment."
+    )
+
+_anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 # ── Tool registry ──────────────────────────────────────────────────────────────
 
-# All tools exposed to the agent. Each MCP wrapper registers its tools here.
 PLANNING_TOOLS = (
     amadeus.get_tools()
     + opentable.get_tools()
@@ -54,10 +56,9 @@ PLANNING_TOOLS = (
     + tripdotcom.get_tools()
 )
 
-# Guide mode adds real-time tools (weather, directions already in planning set)
-GUIDE_TOOLS = PLANNING_TOOLS  # Iteration 2: add get_directions, get_wait_times, etc.
+# Guide mode adds real-time tools (Iteration 2: get_directions, get_wait_times, etc.)
+GUIDE_TOOLS = PLANNING_TOOLS
 
-# Tool name → module dispatch table
 TOOL_DISPATCH = {
     # Amadeus
     "search_flights": amadeus,
@@ -99,14 +100,28 @@ async def _build_system_prompt(trip: Trip, db: AsyncSession) -> str:
     today = date.today().isoformat()
     mode = trip.status
 
-    # Build traveler profile summary
     result = await db.execute(select(User).where(User.id == trip.user_id))
     user = result.scalar_one_or_none()
     traveler_profile = ""
     if user:
         travelers = user.travelers or []
         prefs = user.preferences or {}
-        traveler_profile = f"Travelers: {json.dumps(travelers)}. Preferences: {json.dumps(prefs)}."
+        # Include age context so the agent can make age-gated decisions
+        age_context = ""
+        if user.date_of_birth:
+            today_date = date.today()
+            age = (
+                today_date.year
+                - user.date_of_birth.year
+                - (
+                    (today_date.month, today_date.day)
+                    < (user.date_of_birth.month, user.date_of_birth.day)
+                )
+            )
+            age_context = f" Age: {age} (verification: {user.age_declaration_method or 'none'})."
+        traveler_profile = (
+            f"Travelers: {json.dumps(travelers)}. Preferences: {json.dumps(prefs)}.{age_context}"
+        )
 
     destinations = [
         f"{d.city}, {d.country} ({d.arrival_date} – {d.departure_date})"
@@ -124,7 +139,6 @@ async def _build_system_prompt(trip: Trip, db: AsyncSession) -> str:
     )
 
     if mode == TripStatus.active:
-        # Build today's itinerary summary
         result = await db.execute(
             select(Itinerary)
             .options(selectinload(Itinerary.items))
@@ -137,13 +151,12 @@ async def _build_system_prompt(trip: Trip, db: AsyncSession) -> str:
                 f"- {item.start_time or '?'} {item.name} ({item.flexibility})"
                 for item in sorted(todays_itin.items, key=lambda x: x.start_time or "")
             )
-        next_fixed = "None"
         return GUIDE_SYSTEM_PROMPT.format(
             trip_id=trip.id,
             today=today,
             current_location=destinations[0] if destinations else "Unknown",
             todays_itinerary=items_summary,
-            next_fixed_event=next_fixed,
+            next_fixed_event="None",
             weather_summary="(use get_weather tool for current conditions)",
         )
     else:
@@ -169,7 +182,6 @@ async def chat_stream(
         data: {"type": "tool_result", "tool": "...", "result": {...}}\n\n
         data: {"type": "done"}\n\n
     """
-    # Load trip
     result = await db.execute(
         select(Trip)
         .options(selectinload(Trip.destinations))
@@ -184,19 +196,38 @@ async def chat_stream(
     system_prompt = await _build_system_prompt(trip, db)
     tools = GUIDE_TOOLS if trip.status == TripStatus.active else PLANNING_TOOLS
 
-    # Append user message
     now_iso = datetime.now(timezone.utc).isoformat()
-    messages = list(conv.messages)  # copy to avoid mutation issues
-    messages.append({"role": "user", "content": user_message, "timestamp": now_iso})
 
-    # Build Anthropic messages list (role + content only — no timestamp in API call)
+    # Build full message list including the new user message.
+    # conv.messages stores the complete exchange (user turns, assistant turns,
+    # tool-result turns) so history is faithfully replayed to the API.
+    messages = list(conv.messages)
+    new_user_msg = {"role": "user", "content": user_message, "timestamp": now_iso}
+    messages.append(new_user_msg)
+
+    # api_messages strips timestamps — Anthropic API only accepts role + content
     api_messages = [{"role": m["role"], "content": m["content"]} for m in messages]
 
     full_assistant_text = ""
+    iteration = 0
 
     # Agentic loop — handles multi-step tool calls
     while True:
-        response = _get_client().messages.create(
+        if iteration >= settings.agent_max_iterations:
+            logger.warning(
+                "Agent reached max iterations (%d) for trip %d",
+                settings.agent_max_iterations,
+                trip_id,
+            )
+            yield _sse({
+                "type": "error",
+                "message": "The agent reached its maximum processing steps. Please try rephrasing your request.",
+            })
+            break
+
+        iteration += 1
+
+        response = _anthropic_client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
             system=system_prompt,
@@ -207,7 +238,7 @@ async def chat_stream(
 
         current_tool_use_block: dict | None = None
         current_tool_input_json = ""
-        response_content_blocks = []  # full content for the message
+        response_content_blocks = []
 
         with response as stream:
             for event in stream:
@@ -249,17 +280,18 @@ async def chat_stream(
                         current_tool_use_block = None
                         current_tool_input_json = ""
 
-                elif etype == "message_delta":
-                    stop_reason = event.delta.stop_reason
-
-        # After stream ends — append assistant message to api_messages
+        # Append assistant turn to api_messages and to the persistent store
+        assistant_ts = datetime.now(timezone.utc).isoformat()
         api_messages.append({"role": "assistant", "content": response_content_blocks})
+        messages.append({
+            "role": "assistant",
+            "content": response_content_blocks,
+            "timestamp": assistant_ts,
+        })
 
-        # Check if we need to execute tools
         tool_use_blocks = [b for b in response_content_blocks if b.get("type") == "tool_use"]
 
         if not tool_use_blocks:
-            # No tools — we're done
             break
 
         # Execute all tools and build tool_results message
@@ -274,7 +306,7 @@ async def chat_stream(
                 try:
                     result_data = await module.execute_tool(tool_name, tool_input)
                 except Exception as e:
-                    logger.exception(f"Tool {tool_name} failed")
+                    logger.exception("Tool %s failed", tool_name)
                     result_data = {"error": str(e)}
             else:
                 result_data = {"error": f"Tool '{tool_name}' not implemented"}
@@ -286,15 +318,16 @@ async def chat_stream(
                 "content": json.dumps(result_data),
             })
 
+        # Append tool-result turn — persisted so the next request replays correctly
+        tool_result_ts = datetime.now(timezone.utc).isoformat()
         api_messages.append({"role": "user", "content": tool_results})
-        # Continue loop to get assistant's response after tool results
+        messages.append({
+            "role": "user",
+            "content": tool_results,
+            "timestamp": tool_result_ts,
+        })
 
-    # Persist updated conversation
-    messages.append({
-        "role": "assistant",
-        "content": full_assistant_text,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
+    # Persist the full updated exchange (including tool turns)
     conv.messages = messages
     await db.flush()
 

@@ -42,9 +42,22 @@ class Settings(BaseSettings):
     # SNS (push notifications) — empty disables in dev
     sns_topic_arn: str = ""
 
+    # API docs — set to False in production
+    docs_enabled: bool = True
+
+    # Rate limits (requests per minute per user, external-facing endpoints only)
+    rate_limit_read_per_minute: int = 60
+    rate_limit_write_per_minute: int = 30
+    rate_limit_chat_per_minute: int = 10
+
+    # Agent safety
+    agent_max_iterations: int = 10
+    chat_message_max_length: int = 4000
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 settings = Settings()
