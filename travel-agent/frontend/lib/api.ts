@@ -126,3 +126,31 @@ export const getAlerts = (tripId: number) =>
 
 export const markAlertRead = (tripId: number, alertId: number) =>
   post(`/api/v1/trips/${tripId}/alerts/${alertId}/read`, {});
+
+// ── Location ───────────────────────────────────────────────────────────────────
+
+export async function postLocation(tripId: number, lat: number, lng: number): Promise<void> {
+  await fetch(`${API_URL}/api/v1/trips/${tripId}/location`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    body: JSON.stringify({ lat, lng }),
+  });
+}
+
+// ── User profile ───────────────────────────────────────────────────────────────
+
+export const getUserProfile = () =>
+  get<import("@/types").UserProfile>("/api/v1/users/me");
+
+export const updateUserProfile = (body: Partial<import("@/types").UserProfile>) =>
+  patch<import("@/types").UserProfile>("/api/v1/users/me", body);
+
+export const exportData = () => get<unknown>("/api/v1/users/me/export");
+
+export async function deleteAccount(): Promise<void> {
+  const res = await fetch(`${API_URL}/api/v1/users/me`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) throw new Error(`DELETE /api/v1/users/me → ${res.status}`);
+}

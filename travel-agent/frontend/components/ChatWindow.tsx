@@ -95,6 +95,7 @@ export default function ChatWindow({ messages, streaming, onSend, tripStatus }: 
             key={i}
             message={msg}
             isStreaming={streaming && i === messages.length - 1 && msg.role === "assistant"}
+            onSend={onSend}
           />
         ))}
 
