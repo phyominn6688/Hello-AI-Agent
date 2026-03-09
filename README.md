@@ -117,16 +117,26 @@ See [`travel-agent-infra/README.md`](travel-agent-infra/README.md) for prerequis
 | `get_weather` | OpenWeatherMap | Both |
 | `check_calendar_conflicts` / `update_calendar` | Google Calendar | Planning |
 | `save_to_wallet` / `store_document` | Apple PassKit / Google Wallet / S3 | Planning |
-| `get_directions` / `get_traffic` / `find_nearby` | Google Maps | Guide |
-| `get_daily_itinerary` / `optimize_day_plan` | Internal DB | Guide |
-| `cancel_booking` / `modify_booking` | Amadeus (write) | Guide |
+| `get_directions` | Google Maps Directions API | Guide |
+| `search_nearby` | Google Maps Places API | Guide |
+| `get_wait_times` | Google Maps + mock | Guide |
+| `cancel_booking` / `modify_booking` | Amadeus (write) | Guide (Iteration 3) |
 
 Adding a new tool: create a module in `backend/app/agent/mcp/` with `get_tools()` and `execute_tool()`, then register it in `travel_agent.py`. See [`travel-agent/README.md`](travel-agent/README.md) for details.
+
+## Security & compliance
+
+- **Rate limiting** — per-user sliding-window limits on all external-facing API and chat endpoints (429 with `Retry-After` header)
+- **GDPR** — right to erasure (`DELETE /api/v1/users/me`), data portability (`GET /api/v1/users/me/export`)
+- **Age verification** — lazy DOB self-declaration triggered only when the user requests age-restricted assistance; agent warns regardless of declared age
+- **Data isolation** — agent system prompt explicitly prevents sharing one user's itinerary with any other user
+- **AI safety guardrails** — agent refuses illegal activities, injection attempts, and off-topic requests; `[SYSTEM]` worker notifications are clearly scoped
+- **Security headers** — `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on all responses
 
 ## Iteration roadmap
 
 | | Scope |
 |---|---|
 | ✅ Iteration 1 | Planning loop · Cognito auth (Google) · Visa/entry checks · Availability · Flight + hotel search · Calendar sync · Desktop chat UI |
-| 🔜 Iteration 2 | Guide mode · Morning briefing · Push notifications (SNS) · Dynamic replanning · Leave-now alerts · PWA geolocation |
-| 🔜 Iteration 3 | Real write bookings · Autonomous actions + audit log · Apple/Google Wallet · Flight change monitoring · Rail search |
+| ✅ Iteration 2 | Guide mode · Morning briefing · Push notifications (SNS) · Dynamic replanning with trade-off UI · Leave-now alerts · PWA geolocation · Flight monitoring · Security hardening · GDPR endpoints |
+| 🔜 Iteration 3 | Real write bookings · Autonomous actions + audit log · Apple/Google Wallet · Booking Sub-Agent |

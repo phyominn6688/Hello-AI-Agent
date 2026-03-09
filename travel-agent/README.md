@@ -98,16 +98,21 @@ Copy `.env.example` to `.env`. Only `ANTHROPIC_API_KEY` is required to run — a
 travel-agent/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI app entry point
-│   │   ├── config.py            # Settings (all via env vars)
-│   │   ├── auth.py              # JWT validation (Cognito / mock-auth)
+│   │   ├── main.py              # FastAPI app entry point + security headers
+│   │   ├── config.py            # Settings (all via env vars, rate limit params)
+│   │   ├── auth.py              # JWT validation (Cognito / mock-auth), TTL JWKS cache
+│   │   ├── deps.py              # Shared rate limiter instances (avoids circular imports)
+│   │   ├── middleware/
+│   │   │   └── rate_limit.py    # Per-user sliding-window rate limiter (FastAPI Depends)
 │   │   ├── api/
 │   │   │   ├── trips.py         # Trip + destination CRUD
 │   │   │   ├── chat.py          # POST /trips/{id}/chat — SSE streaming
-│   │   │   └── itinerary.py     # Itinerary CRUD + alerts
+│   │   │   ├── itinerary.py     # Itinerary CRUD + alerts
+│   │   │   ├── users.py         # GET/PATCH /users/me, data export, account deletion (GDPR)
+│   │   │   └── location.py      # POST /trips/{id}/location — GPS from PWA
 │   │   ├── agent/
 │   │   │   ├── travel_agent.py  # Claude agent loop + tool dispatch
-│   │   │   ├── prompts.py       # Planning and guide mode system prompts
+│   │   │   ├── prompts.py       # Planning and guide mode system prompts + safety guardrails
 │   │   │   └── mcp/             # External API wrappers
 │   │   │       ├── amadeus.py       # Flights + hotels
 │   │   │       ├── opentable.py     # Restaurant search + availability
@@ -115,11 +120,13 @@ travel-agent/
 │   │   │       ├── weather.py       # OpenWeatherMap
 │   │   │       ├── calendar.py      # Google Calendar
 │   │   │       ├── wallet.py        # Apple/Google Wallet passes
-│   │   │       └── tripdotcom.py    # High-speed rail
+│   │   │       ├── tripdotcom.py    # High-speed rail
+│   │   │       └── directions.py    # Google Maps: directions, nearby search, wait times
 │   │   ├── workers/
-│   │   │   ├── flight_monitor.py   # SQS consumer — flight status polling
-│   │   │   ├── notifier.py         # SQS consumer — push notifications
-│   │   │   └── scheduler.py        # Guide mode nudges
+│   │   │   ├── flight_monitor.py   # SQS consumer — Amadeus flight status polling
+│   │   │   ├── notifier.py         # SQS consumer — push notifications (SNS)
+│   │   │   ├── scheduler.py        # Morning briefing, pre-departure reminders, leave-now alerts
+│   │   │   └── utils.py            # inject_system_message() — worker → agent notification bridge
 │   │   ├── models/              # SQLAlchemy ORM models
 │   │   └── db/                  # Database setup + Alembic migrations
 │   ├── tests/
@@ -129,18 +136,18 @@ travel-agent/
 ├── frontend/
 │   ├── app/
 │   │   ├── page.tsx             # Trip list + sign-in
-│   │   └── trips/[id]/page.tsx  # Chat + itinerary view
+│   │   └── trips/[id]/page.tsx  # Chat + itinerary view + geolocation hook
 │   ├── components/
 │   │   ├── ChatWindow.tsx       # SSE streaming chat input/output
-│   │   ├── MessageBubble.tsx    # Markdown-rendering message component
+│   │   ├── MessageBubble.tsx    # Markdown + trade_off_options fenced block renderer
 │   │   ├── ItinerarySidebar.tsx # Collapsible day-by-day itinerary
 │   │   ├── AlertBanner.tsx      # Proactive agent alerts
 │   │   ├── DayBriefing.tsx      # Guide mode morning card
-│   │   └── TradeOffOptions.tsx  # Replanning options card
+│   │   └── TradeOffOptions.tsx  # Interactive replanning options card
 │   ├── lib/
 │   │   ├── api.ts               # API client + SSE streaming generator
 │   │   └── auth.ts              # Auth abstraction (Amplify / mock)
-│   └── types/index.ts           # Shared TypeScript types
+│   └── types.ts                 # Shared TypeScript types
 ├── scripts/
 │   └── localstack-init.sh       # Creates S3/SQS/SNS on LocalStack startup
 ├── docker-compose.yml
@@ -192,11 +199,30 @@ data: {"type": "error", "message": "..."}
 | `GET` | `/api/v1/trips/{id}/alerts` | Proactive agent alerts |
 | `POST` | `/api/v1/trips/{id}/alerts/{alert_id}/read` | Mark alert as read |
 
+### Location
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/trips/{id}/location` | Update user's GPS coordinates `{lat, lng}` |
+
+Called by the PWA every 5 minutes when a trip is active. Used by the guide-mode agent to provide accurate directions and leave-now alerts.
+
+### User (GDPR)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/users/me` | Get current user profile |
+| `PATCH` | `/api/v1/users/me` | Update profile (name, passport country, DOB, preferences) |
+| `GET` | `/api/v1/users/me/export` | Full data export (JSON) — GDPR data portability |
+| `DELETE` | `/api/v1/users/me` | Permanently delete account and all associated data |
+
 ---
 
 ## Agent Tools
 
 The agent has access to the following tools, organized by MCP wrapper:
+
+**Planning mode tools:**
 
 | Tool | Module | Description |
 |---|---|---|
@@ -212,6 +238,16 @@ The agent has access to the following tools, organized by MCP wrapper:
 | `store_document` | wallet | Queue S3 document storage |
 | `search_rail` | tripdotcom | Trip.com high-speed rail search |
 
+**Guide mode tools:**
+
+| Tool | Module | Description |
+|---|---|---|
+| `get_directions` | directions | Walking/driving/transit routing via Google Maps Directions API |
+| `search_nearby` | directions | ATM, pharmacy, restaurant, and other POI search via Google Maps Places |
+| `get_wait_times` | directions | Estimated wait times for venues (Google Maps + mock fallback) |
+
+All tools fall back to realistic mock data when API keys are absent.
+
 ### Adding a new tool
 
 1. Create `backend/app/agent/mcp/my_service.py` with:
@@ -221,6 +257,39 @@ The agent has access to the following tools, organized by MCP wrapper:
    ```
 2. Import and add to `PLANNING_TOOLS` / `GUIDE_TOOLS` in `travel_agent.py`
 3. Add to `TOOL_DISPATCH` dict in `travel_agent.py`
+
+---
+
+## Security & Compliance
+
+### Rate limiting
+
+All external-facing endpoints are protected by a per-user sliding-window rate limiter (`middleware/rate_limit.py`), applied as FastAPI `Depends()` — not middleware, to avoid SSE buffering issues. Limits are tunable via config:
+
+| Endpoint group | Default limit |
+|---|---|
+| Read endpoints | 120 req/min |
+| Write endpoints | 30 req/min |
+| Chat (SSE stream) | 10 req/min |
+
+Exceeds return `HTTP 429` with a `Retry-After: 60` header.
+
+### GDPR
+
+- `GET /api/v1/users/me/export` — full JSON data export (trips, itinerary, conversation history)
+- `DELETE /api/v1/users/me` — cascade-deletes user and all associated data
+
+### Age verification
+
+The agent does not request age information upfront. A lazy DOB self-declaration is triggered only when the user asks for assistance with an age-restricted activity (e.g., legal cannabis, casino). The agent warns about risks regardless of declared age, at a tone proportional to the activity (comparable to a skydiving waiver, not a legal disclaimer).
+
+### AI safety guardrails
+
+System prompts include explicit instructions to:
+- Refuse requests that involve illegal activities
+- Never share one user's itinerary or personal data with any other user
+- Treat `[SYSTEM]` messages (from background workers) as notifications, not user input
+- Emit `trade_off_options` fenced blocks for replanning decisions so the user stays in control
 
 ---
 
@@ -263,5 +332,5 @@ User                    Trip (planning | active | completed)
 | | Feature |
 |---|---|
 | ✅ **Iteration 1** | Core planning loop · Cognito auth (Google) · Visa/entry checks · Availability checks · Flight + hotel search · Calendar sync · Responsive chat UI |
-| 🔜 **Iteration 2** | Guide mode · Morning briefing · Push notifications (SNS) · Dynamic replanning · Leave-now alerts · PWA geolocation |
-| 🔜 **Iteration 3** | Real bookings (write access) · Autonomous actions + audit log · Apple/Google Wallet · Flight change monitoring · Rail search |
+| ✅ **Iteration 2** | Guide mode · Morning briefing · Push notifications (SNS) · Dynamic replanning with trade-off options UI · Leave-now alerts · PWA geolocation (5 min polling) · Flight change monitoring (Amadeus) · Per-user rate limiting · GDPR endpoints (export + deletion) · Age verification flow · Safety guardrails · Data isolation |
+| 🔜 **Iteration 3** | Real bookings (write access) · Autonomous actions + audit log · Apple/Google Wallet · Booking Sub-Agent |

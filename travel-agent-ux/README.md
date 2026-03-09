@@ -56,10 +56,10 @@ src/
 │   ├── TripList.tsx  # Trip cards + FAB to create trip
 │   └── Chat.tsx      # Messages + input bar + itinerary sheet toggle
 └── components/
-    ├── Message.tsx         # Chat bubble with minimal markdown
+    ├── Message.tsx         # Chat bubble with minimal markdown + trade-off options
     ├── TypingIndicator.tsx # Three-dot animation
     ├── ItinerarySheet.tsx  # Bottom sheet, swipe to dismiss
-    └── AlertBanner.tsx     # Proactive alert strip
+    └── AlertBanner.tsx     # Proactive alert strip (flight delays, leave-now)
 ```
 
 ## PWA

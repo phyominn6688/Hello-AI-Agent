@@ -27,10 +27,10 @@ This repo contains only infrastructure code. Business logic lives in [`travel-ag
                         SQS                   S3
                          │
               ECS Workers / Lambda
-              - Flight change monitoring
+              - Flight change monitoring (Amadeus v2)
               - Push notifications (SNS)
-              - Autonomous booking actions
-              - Wallet pass generation
+              - Morning briefing + leave-now alerts
+              - Wallet pass generation (Iteration 3)
 ```
 
 ### Scale path (no re-architecture needed)
