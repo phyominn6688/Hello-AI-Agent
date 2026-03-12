@@ -1,12 +1,15 @@
 "use client";
 
 import { format, parseISO } from "date-fns";
+import { useEffect, useState } from "react";
 import {
   PlaneTakeoffIcon, BuildingIcon, UtensilsIcon, TicketIcon,
   MapPinIcon, TrainIcon, CarIcon, CheckCircleIcon, ClockIcon,
-  BookmarkIcon
+  BookmarkIcon, ChevronDownIcon, ChevronRightIcon,
 } from "lucide-react";
 import type { ItineraryDay, ItineraryItem, ItemType, Trip, WishlistStatus } from "@/types";
+import { getWishlist, promoteWishlistItem, removeWishlistItem } from "@/lib/api";
+import WishlistCard from "./WishlistCard";
 
 const TYPE_ICON: Record<ItemType, React.ElementType> = {
   flight: PlaneTakeoffIcon,
@@ -72,15 +75,30 @@ function ItemCard({ item }: { item: ItineraryItem }) {
             <p className="text-xs text-slate-400 mt-0.5 truncate">{item.location.address}</p>
           )}
           {item.wallet_pass_url && (
-            <a
-              href={item.wallet_pass_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 mt-1.5 text-xs text-blue-600 hover:text-blue-700"
-            >
-              <BookmarkIcon className="w-3 h-3" />
-              Add to Wallet
-            </a>
+            <div className="flex gap-2 mt-1.5">
+              {item.wallet_pass_url.apple && (
+                <a
+                  href={item.wallet_pass_url.apple}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-slate-700 bg-slate-900 text-white px-2 py-0.5 rounded hover:bg-slate-700 transition-colors"
+                >
+                  <BookmarkIcon className="w-3 h-3" />
+                  Apple Wallet
+                </a>
+              )}
+              {item.wallet_pass_url.google && (
+                <a
+                  href={item.wallet_pass_url.google}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-white bg-blue-600 px-2 py-0.5 rounded hover:bg-blue-700 transition-colors"
+                >
+                  <BookmarkIcon className="w-3 h-3" />
+                  Google Wallet
+                </a>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -121,6 +139,25 @@ interface Props {
 
 export default function ItinerarySidebar({ trip, itinerary }: Props) {
   const sortedDays = [...itinerary].sort((a, b) => a.date.localeCompare(b.date));
+  const [wishlistOpen, setWishlistOpen] = useState(false);
+  const [wishlistItems, setWishlistItems] = useState<ItineraryItem[]>([]);
+
+  useEffect(() => {
+    if (!wishlistOpen) return;
+    getWishlist(trip.id)
+      .then(setWishlistItems)
+      .catch(() => {});
+  }, [wishlistOpen, trip.id]);
+
+  const handleSchedule = async (itemId: number, date: string, startTime?: string) => {
+    await promoteWishlistItem(trip.id, itemId, date, startTime);
+    setWishlistItems((prev) => prev.filter((i) => i.id !== itemId));
+  };
+
+  const handleRemove = async (itemId: number) => {
+    await removeWishlistItem(trip.id, itemId);
+    setWishlistItems((prev) => prev.filter((i) => i.id !== itemId));
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -149,6 +186,39 @@ export default function ItinerarySidebar({ trip, itinerary }: Props) {
         ) : (
           sortedDays.map((day) => <DaySection key={day.id} day={day} />)
         )}
+
+        {/* Wishlist collapsible section */}
+        <div className="border-t border-slate-100">
+          <button
+            onClick={() => setWishlistOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wide hover:bg-slate-50 transition-colors"
+          >
+            <span>Wishlist</span>
+            {wishlistOpen ? (
+              <ChevronDownIcon className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRightIcon className="w-3.5 h-3.5" />
+            )}
+          </button>
+          {wishlistOpen && (
+            <div className="px-4 pb-4 space-y-2">
+              {wishlistItems.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">
+                  No wishlist items yet — tell the agent to save something for later.
+                </p>
+              ) : (
+                wishlistItems.map((item) => (
+                  <WishlistCard
+                    key={item.id}
+                    item={item}
+                    onSchedule={handleSchedule}
+                    onRemove={handleRemove}
+                  />
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Budget summary */}

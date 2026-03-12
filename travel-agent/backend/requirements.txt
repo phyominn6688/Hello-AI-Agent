@@ -26,6 +26,13 @@ boto3==1.35.84
 google-api-python-client==2.154.0
 google-auth==2.37.0
 
+# Payments (Iteration 3)
+stripe>=7.0.0
+# NOTE: Apple Wallet pass signing requires the 'passlib' or 'cryptography' library
+# and a valid P12 certificate from Apple Developer account.
+# Uncomment when implementing production pass signing:
+# passlib[bcrypt]>=1.7.4
+
 # Dev/test
 pytest==8.3.4
 pytest-asyncio==0.24.0

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { SendIcon } from "lucide-react";
+import { SendIcon, Loader2Icon, CheckCircleIcon, XCircleIcon } from "lucide-react";
 import MessageBubble from "./MessageBubble";
-import type { ChatMessage, TripStatus } from "@/types";
+import BookingConfirmModal from "./BookingConfirmModal";
+import type { ChatMessage, ItineraryItem, SSEEvent, TripStatus } from "@/types";
 
 const PLACEHOLDER: Record<TripStatus, string> = {
   planning: "Ask anything — \"What's the best area to stay in Beijing?\"",
@@ -11,15 +12,29 @@ const PLACEHOLDER: Record<TripStatus, string> = {
   completed: "This trip is completed.",
 };
 
+type BookingState =
+  | { phase: "idle" }
+  | {
+      phase: "confirm";
+      item: ItineraryItem;
+      priceBreakdown: Record<string, number>;
+      currency: string;
+    }
+  | { phase: "in_progress" }
+  | { phase: "success"; booking_ref?: string }
+  | { phase: "error"; error: string };
+
 interface Props {
   messages: ChatMessage[];
   streaming: boolean;
   onSend: (text: string) => void;
+  onBookingEvent?: (event: SSEEvent) => void;
   tripStatus: TripStatus;
 }
 
-export default function ChatWindow({ messages, streaming, onSend, tripStatus }: Props) {
+export default function ChatWindow({ messages, streaming, onSend, onBookingEvent, tripStatus }: Props) {
   const [input, setInput] = useState("");
+  const [bookingState, setBookingState] = useState<BookingState>({ phase: "idle" });
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -99,8 +114,47 @@ export default function ChatWindow({ messages, streaming, onSend, tripStatus }: 
           />
         ))}
 
+        {/* Booking progress/result inline cards */}
+        {bookingState.phase === "in_progress" && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800 my-2">
+            <Loader2Icon className="w-4 h-4 animate-spin shrink-0" />
+            <span>Booking in progress…</span>
+          </div>
+        )}
+        {bookingState.phase === "success" && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800 my-2">
+            <CheckCircleIcon className="w-4 h-4 shrink-0" />
+            <span>
+              Booking confirmed!
+              {bookingState.booking_ref && (
+                <> Ref: <strong>{bookingState.booking_ref}</strong></>
+              )}
+            </span>
+          </div>
+        )}
+        {bookingState.phase === "error" && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 my-2">
+            <XCircleIcon className="w-4 h-4 shrink-0" />
+            <span>{bookingState.error}</span>
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
+
+      {/* Booking confirmation modal */}
+      {bookingState.phase === "confirm" && (
+        <BookingConfirmModal
+          item={bookingState.item}
+          priceBreakdown={bookingState.priceBreakdown}
+          currency={bookingState.currency}
+          paymentMethodId=""
+          onConfirm={(_bookingToken) => {
+            setBookingState({ phase: "idle" });
+          }}
+          onCancel={() => setBookingState({ phase: "idle" })}
+        />
+      )}
 
       {/* Input bar */}
       <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">

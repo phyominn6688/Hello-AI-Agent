@@ -1,0 +1,188 @@
+# CDK Changes Required for Iteration 3 Payments & Wallet
+
+This file documents the infrastructure changes needed to support the Iteration 3
+booking and wallet features. Implement these in the relevant CDK stacks.
+
+---
+
+## 1. Secrets Manager Secrets
+
+Create the following secrets before deploying the updated Compute/Async stacks.
+
+```bash
+# Stripe
+aws secretsmanager create-secret \
+  --name /travel-agent/{env}/stripe-secret-key \
+  --secret-string "sk_live_..."
+
+aws secretsmanager create-secret \
+  --name /travel-agent/{env}/stripe-webhook-secret \
+  --secret-string "whsec_..."
+
+# Apple Wallet P12 certificate (base64-encoded)
+# Export from Apple Developer portal as .p12, then:
+# base64 -i certificate.p12 | aws secretsmanager create-secret ...
+aws secretsmanager create-secret \
+  --name /travel-agent/{env}/apple-pass-certificate \
+  --secret-binary fileb://certificate.p12.b64
+
+# Google Wallet service account JSON
+aws secretsmanager create-secret \
+  --name /travel-agent/{env}/google-wallet-service-account \
+  --secret-string "$(cat service-account.json)"
+```
+
+Add the following SSM parameters (referenced by config.py via env vars):
+- `/travel-agent/{env}/stripe-secret-key` → `STRIPE_SECRET_KEY`
+- `/travel-agent/{env}/stripe-webhook-secret` → `STRIPE_WEBHOOK_SECRET`
+- `/travel-agent/{env}/stripe-publishable-key` → `STRIPE_PUBLISHABLE_KEY`
+- `/travel-agent/{env}/apple-pass-certificate-secret-arn` → `APPLE_PASS_CERTIFICATE_SECRET_ARN`
+- `/travel-agent/{env}/google-wallet-service-account-secret-arn` → `GOOGLE_WALLET_SERVICE_ACCOUNT_SECRET_ARN`
+- `/travel-agent/{env}/google-wallet-issuer-id` → `GOOGLE_WALLET_ISSUER_ID`
+- `/travel-agent/{env}/apple-pass-type-id` → `APPLE_PASS_TYPE_ID` (e.g. `pass.com.example.travelagent`)
+- `/travel-agent/{env}/apple-team-id` → `APPLE_TEAM_ID`
+
+---
+
+## 2. New SQS Queue: travel-agent-wallet
+
+Add to `async-stack.ts`:
+
+```typescript
+const walletQueue = new sqs.Queue(this, "WalletQueue", {
+  queueName: `travel-agent-wallet-${props.envName}`,
+  visibilityTimeout: cdk.Duration.seconds(120),
+  retentionPeriod: cdk.Duration.days(4),
+  deadLetterQueue: {
+    queue: walletDlq,
+    maxReceiveCount: 3,
+  },
+});
+// Export queue URL for Compute stack
+new cdk.CfnOutput(this, "WalletQueueUrl", { value: walletQueue.queueUrl });
+```
+
+Pass `walletQueue.queueUrl` as `WALLET_QUEUE_URL` env var to both the main backend
+task definition and the new wallet-worker task definition.
+
+---
+
+## 3. New ECS Task: wallet-worker
+
+Add to `async-stack.ts` (similar pattern to existing SQS workers):
+
+```typescript
+const walletWorkerTask = new ecs.FargateTaskDefinition(this, "WalletWorkerTask", {
+  memoryLimitMiB: 512,
+  cpu: 256,
+});
+
+walletWorkerTask.addContainer("wallet-worker", {
+  image: ecs.ContainerImage.fromEcrRepository(backendRepo, "latest"),
+  command: ["python", "-m", "app.workers.wallet_worker"],
+  environment: {
+    WALLET_QUEUE_URL: walletQueue.queueUrl,
+    STORAGE_BUCKET: props.storageBucket,
+    SNS_TOPIC_ARN: props.snsTopicArn,
+    APPLE_PASS_CERTIFICATE_SECRET_ARN: applePassCertSecretArn,
+    GOOGLE_WALLET_SERVICE_ACCOUNT_SECRET_ARN: googleWalletSASecretArn,
+    GOOGLE_WALLET_ISSUER_ID: googleWalletIssuerId,
+    APPLE_PASS_TYPE_ID: applePassTypeId,
+    APPLE_TEAM_ID: appleTeamId,
+  },
+  logging: ecs.LogDrivers.awsLogs({ streamPrefix: "wallet-worker" }),
+});
+
+// Grant secrets read access
+applePassCertSecret.grantRead(walletWorkerTask.taskRole);
+googleWalletSASecret.grantRead(walletWorkerTask.taskRole);
+
+// Grant SQS consume + S3 write
+walletQueue.grantConsumeMessages(walletWorkerTask.taskRole);
+props.storageBucketArn && walletWorkerTask.taskRole.addToPrincipalPolicy(
+  new iam.PolicyStatement({
+    actions: ["s3:PutObject", "s3:GetObject"],
+    resources: [`${props.storageBucketArn}/passes/*`],
+  })
+);
+```
+
+---
+
+## 4. ALB Listener Rule: /webhooks/stripe
+
+Add to `compute-stack.ts` — the Stripe webhook endpoint must NOT require the
+Authorization header that the auth middleware adds to all other routes.
+
+```typescript
+// Stripe webhook rule — no auth header required, bypasses auth middleware
+// The endpoint itself verifies the Stripe-Signature header.
+httpListener.addTargets("StripeWebhookTarget", {
+  targetGroupName: "stripe-webhook",
+  port: 8000,
+  protocol: elb.ApplicationProtocol.HTTP,
+  targets: [fargateService],
+  priority: 1,  // Higher priority than the catch-all rule
+  conditions: [elb.ListenerCondition.pathPatterns(["/webhooks/stripe"])],
+  healthCheck: {
+    path: "/health",
+    interval: cdk.Duration.seconds(30),
+  },
+});
+```
+
+Note: Ensure the security group allows inbound from Stripe's IP ranges on port 443.
+Stripe publishes its IP range at: https://stripe.com/files/ips/ips_webhooks.txt
+
+---
+
+## 5. S3 Bucket Policy Updates
+
+Add to `storage-stack.ts` — allow the wallet worker to read/write the `passes/` prefix:
+
+```typescript
+// Wallet pass templates (uploaded manually by ops) — read-only for workers
+// Wallet pass outputs (generated by wallet-worker) — read/write for wallet worker
+storageBucket.addToResourcePolicy(new iam.PolicyStatement({
+  effect: iam.Effect.ALLOW,
+  principals: [new iam.ArnPrincipal(walletWorkerTaskRoleArn)],
+  actions: ["s3:GetObject", "s3:PutObject"],
+  resources: [
+    storageBucket.arnForObjects("passes/templates/*"),
+    storageBucket.arnForObjects("passes/generated/*"),
+  ],
+}));
+```
+
+CloudFront distribution should include `passes/generated/*` in its allowed origins
+with a signed URL policy (7-day TTL for wallet pass links).
+
+---
+
+## 6. Environment Variable Summary for Backend Task
+
+Add to the Compute stack task definition environment:
+
+```
+STRIPE_SECRET_KEY             → from Secrets Manager
+STRIPE_WEBHOOK_SECRET         → from Secrets Manager
+STRIPE_PUBLISHABLE_KEY        → from SSM Parameter (not secret)
+BOOKING_ALLOWED               → "true" (prod only; "false" in dev/staging)
+BOOKING_LIMITER_PER_HOUR      → "5"
+APPLE_PASS_TYPE_ID            → from SSM Parameter
+APPLE_TEAM_ID                 → from SSM Parameter
+APPLE_PASS_CERTIFICATE_SECRET_ARN → ARN of Secrets Manager secret
+GOOGLE_WALLET_ISSUER_ID       → from SSM Parameter
+GOOGLE_WALLET_SERVICE_ACCOUNT_SECRET_ARN → ARN of Secrets Manager secret
+WALLET_QUEUE_URL              → wallet SQS queue URL
+```
+
+---
+
+## 7. Redis Key Space
+
+The booking token system uses Redis keys with 30-second TTL:
+- Pattern: `booking_token:{sha256_hash}` → JSON `{"item_id": N, "used": false}`
+
+Ensure the ElastiCache cluster has sufficient keyspace for concurrent bookings.
+No additional configuration needed — existing Redis setup supports this pattern.

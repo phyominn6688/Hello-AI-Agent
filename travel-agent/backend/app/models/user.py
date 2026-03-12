@@ -30,6 +30,10 @@ class User(Base):
         String(32)
     )  # "self_declared" — expand in future iterations
 
+    # Stripe payment info
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(64))
+    default_payment_method_id: Mapped[str | None] = mapped_column(String(128))
+
     # {"dietary": ["vegetarian"], "mobility": "wheelchair", "interests": ["hiking"]}
     preferences: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
