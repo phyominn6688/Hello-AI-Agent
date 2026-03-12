@@ -36,6 +36,24 @@ class Settings(BaseSettings):
     sherpa_api_key: str = ""
     tripdotcom_api_key: str = ""
 
+    # Stripe — set to empty string to use mock responses in dev
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_publishable_key: str = ""
+
+    # Booking feature flag — must be True to allow real write bookings
+    booking_allowed: bool = False
+    booking_limiter_per_hour: int = 5
+
+    # Apple Wallet pass signing
+    apple_pass_type_id: str = ""
+    apple_team_id: str = ""
+    apple_pass_certificate_secret_arn: str = ""  # Secrets Manager ARN for P12 cert
+
+    # Google Wallet
+    google_wallet_issuer_id: str = ""
+    google_wallet_service_account_secret_arn: str = ""  # Secrets Manager ARN
+
     # CORS
     cors_origins: List[str] = ["http://localhost:3000"]
 

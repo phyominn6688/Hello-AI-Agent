@@ -126,6 +126,124 @@ def _calc_delay(scheduled: Optional[str], estimated: Optional[str]) -> int:
         return 0
 
 
+# ── Alternative flight search ──────────────────────────────────────────────────
+
+
+async def _search_flight_alternatives(body: dict, status_data: dict, delay_mins: int) -> dict:
+    """Search for alternative flights on the same route within the next 6 hours."""
+    from datetime import datetime, timezone, timedelta
+    from app.config import settings
+
+    item_data = body.get("item_data", {})
+    origin = item_data.get("origin", "")
+    destination = item_data.get("destination", "")
+    scheduled_date = body.get("scheduled_date", "")
+
+    if not (origin and destination and scheduled_date):
+        return {}
+
+    token = await _get_amadeus_token()
+    if not token:
+        # Return mock alternatives if no Amadeus token
+        return {
+            "alternatives": [
+                {
+                    "id": "alt-mock-1",
+                    "origin": origin,
+                    "destination": destination,
+                    "departs": f"{scheduled_date}T18:00:00",
+                    "carrier": "UA",
+                    "flight_number": "UA999",
+                    "price_usd": 350.0,
+                    "disruption_score": 0.3,
+                    "book_url": "https://www.amadeus.com",
+                    "recommended": True,
+                }
+            ]
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{settings.amadeus_base_url}/v2/shopping/flight-offers",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "originLocationCode": origin,
+                    "destinationLocationCode": destination,
+                    "departureDate": scheduled_date,
+                    "adults": 1,
+                    "max": 10,
+                    "currencyCode": "USD",
+                },
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+    except Exception as e:
+        logger.warning("Alternative flight search failed: %s", e)
+        return {}
+
+    flights = raw.get("data", [])
+    estimated_dep = status_data.get("estimated_departure", "")
+
+    scored = []
+    for f in flights[:10]:
+        price = float(f.get("price", {}).get("grandTotal", 0))
+        segs = f.get("itineraries", [{}])[0].get("segments", [{}])
+        departs = segs[0].get("departure", {}).get("at", "") if segs else ""
+        try:
+            dep_dt = datetime.fromisoformat(departs.replace("Z", "+00:00"))
+            if estimated_dep:
+                ref_dt = datetime.fromisoformat(estimated_dep.replace("Z", "+00:00"))
+            else:
+                ref_dt = datetime.now(timezone.utc)
+            delay_mins_from_disruption = max(0, (dep_dt - ref_dt).total_seconds() / 60)
+            disruption_score = min(1.0, delay_mins_from_disruption / 360)
+        except Exception:
+            disruption_score = 0.5
+
+        scored.append({
+            "id": f.get("id"),
+            "origin": origin,
+            "destination": destination,
+            "departs": departs,
+            "carrier": f.get("validatingAirlineCodes", [""])[0],
+            "flight_number": (segs[0].get("number", "") if segs else ""),
+            "price_usd": price,
+            "disruption_score": disruption_score,
+            "book_url": "https://www.amadeus.com",
+            "recommended": False,
+        })
+
+    scored.sort(key=lambda x: x["disruption_score"])
+    top3 = scored[:3]
+    if top3:
+        top3[0]["recommended"] = True
+
+    return {"alternatives": top3}
+
+
+async def _process_proactive_rebook_search(message_body: dict) -> None:
+    """Handle proactive_rebook_search SQS message — search and inject without disruption preamble."""
+    trip_id = message_body.get("trip_id")
+    item_id = message_body.get("item_id")
+
+    if not trip_id:
+        return
+
+    alternatives = await _search_flight_alternatives(message_body, {}, 0)
+    if not alternatives:
+        return
+
+    system_content = (
+        f"Proactive rebooking search completed for item {item_id}. "
+        f"Alternatives found: {json.dumps(alternatives)}. "
+        f"Present these options to the traveler using the trade_off_options format "
+        f"if they are relevant to any upcoming disruption."
+    )
+    await inject_system_message(trip_id, system_content)
+    logger.info("Proactive rebook search injected for trip %d", trip_id)
+
+
 # ── Message processing ─────────────────────────────────────────────────────────
 
 
@@ -161,18 +279,43 @@ async def process_flight_status_check(message: dict) -> None:
         return
 
     alert_type = "cancellation" if delay_mins >= 720 else "flight_change"
-    if delay_mins >= 720:
-        message_text = (
-            f"Flight {flight_number} appears to be cancelled or severely delayed "
-            f"({delay_mins} min). Immediate replanning required."
+
+    if delay_mins >= 120:
+        # Major delay or cancellation — search for alternatives and inject as trade_off_options
+        alternatives = await _search_flight_alternatives(
+            body, status_data, delay_mins
         )
-        system_content = (
-            f"URGENT: Flight {flight_number} is cancelled or severely delayed ({delay_mins} min). "
-            f"Immediately assess the full downstream impact on the itinerary and present "
-            f"replanning options using the trade_off_options format. "
-            f"Search for alternative flights, check hotel flexibility, and flag any cascading impacts."
-        )
+        alt_json = json.dumps(alternatives) if alternatives else "{}"
+
+        if delay_mins >= 720:
+            message_text = (
+                f"Flight {flight_number} appears to be cancelled or severely delayed "
+                f"({delay_mins} min). Immediate replanning required."
+            )
+            system_content = (
+                f"REQUIRES_USER_DECISION: true\n"
+                f"URGENT: Flight {flight_number} is cancelled or severely delayed ({delay_mins} min). "
+                f"Immediately assess the full downstream impact on the itinerary and present "
+                f"replanning options using the trade_off_options format. "
+                f"Search for alternative flights, check hotel flexibility, and flag any cascading impacts.\n"
+                f"Pre-searched alternatives: {alt_json}"
+            )
+        else:
+            message_text = (
+                f"Flight {flight_number} is delayed by {delay_mins} minutes. "
+                f"New estimated departure: {status_data.get('estimated_departure', 'TBD')}."
+            )
+            system_content = (
+                f"REQUIRES_USER_DECISION: true\n"
+                f"Flight {flight_number} is delayed by {delay_mins} minutes "
+                f"(new departure: {status_data.get('estimated_departure', 'TBD')}). "
+                f"This may cascade to downstream itinerary items. "
+                f"Use select_flight_alternative to search for alternatives and present them "
+                f"using the trade_off_options format.\n"
+                f"Pre-searched alternatives: {alt_json}"
+            )
     else:
+        # Minor delay (30-119 min) — just alert, no alternatives search
         message_text = (
             f"Flight {flight_number} is delayed by {delay_mins} minutes. "
             f"New estimated departure: {status_data.get('estimated_departure', 'TBD')}."
@@ -255,8 +398,25 @@ async def run() -> None:
             try:
                 attrs = msg.get("MessageAttributes", {})
                 msg_type = attrs.get("type", {}).get("StringValue", "")
+                body_str = msg.get("Body", "{}")
+
                 if msg_type == "flight_status_check":
                     await process_flight_status_check(msg)
+                elif msg_type == "proactive_rebook_search":
+                    body = json.loads(body_str)
+                    await _process_proactive_rebook_search(body)
+                else:
+                    # Also check body for type field (some SQS producers set it there)
+                    try:
+                        body = json.loads(body_str)
+                        body_type = body.get("type", "")
+                        if body_type == "flight_status_check":
+                            await process_flight_status_check(msg)
+                        elif body_type == "proactive_rebook_search":
+                            await _process_proactive_rebook_search(body)
+                    except Exception:
+                        pass
+
                 await _delete_message(msg["ReceiptHandle"])
             except Exception:
                 logger.exception("Failed to process message %s", msg.get("MessageId"))

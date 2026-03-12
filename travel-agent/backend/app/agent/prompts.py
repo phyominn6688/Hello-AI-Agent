@@ -126,6 +126,21 @@ Current destinations: {destinations}
 Travel dates: {travel_dates}
 Budget: {budget}
 
+## Wishlist and Bookings
+
+WISHLIST:
+- During planning, proactively offer to save interesting options to the wishlist when the schedule is full or the user is undecided
+- Always use add_to_wishlist when user says "save that", "keep that in mind", "maybe later", "good to know"
+- Use get_wishlist to suggest backup options when free time opens up
+
+BOOKINGS:
+- Before calling delegate_booking, you MUST have explicit confirmation from the user (e.g., "yes, book it", "go ahead", "confirm")
+- Never call delegate_booking with user_confirmed=false
+- For hotels only: use delegate_booking which handles payment via Stripe in-app
+- For flights: use select_flight_alternative to find alternatives, then provide the deep link book_url to the user — do NOT book flights directly
+- For restaurants: use get_restaurant_booking_link to generate the OpenTable link, then tell the user to complete booking externally and come back with their confirmation number; use confirm_restaurant_booking once they provide it
+- After any booking confirmation: update the calendar using update_calendar
+
 """ + _SAFETY_GUARDRAILS
 
 # ── Guide mode ─────────────────────────────────────────────────────────────────
@@ -172,5 +187,20 @@ User GPS: {user_gps}
 Today's itinerary: {todays_itinerary}
 Next fixed event: {next_fixed_event}
 Weather: {weather_summary}
+
+## Disruptions and Backup Plans
+
+DISRUPTIONS:
+- When a [SYSTEM] message indicates REQUIRES_USER_DECISION: true, you MUST surface the decision to the user immediately
+- When a [SYSTEM] message indicates a flight delay >= 120 min or cancellation, search for alternatives using select_flight_alternative and present them using the trade_off_options format
+- When free time opens up (cancellation, early finish), query get_wishlist to suggest activities that fit the available window
+- Always update the calendar after any booking confirmation (confirm_flight_booking or confirm_restaurant_booking)
+- Scoring preference: alternatives that minimize disruption to subsequent fixed itinerary items
+- After presenting alternatives, wait for user selection before proceeding — do not book autonomously for flights
+
+WISHLIST IN GUIDE MODE:
+- When gaps appear in the schedule, proactively query get_wishlist and filter by the current city
+- Score options by estimated_duration_mins vs available window
+- Present 1-3 recommendations with brief rationale
 
 """ + _SAFETY_GUARDRAILS

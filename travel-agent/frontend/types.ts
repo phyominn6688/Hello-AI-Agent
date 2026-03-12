@@ -56,7 +56,8 @@ export interface ItineraryItem {
   booking_ref?: string;
   booking_status?: string;
   confirmation_doc_url?: string;
-  wallet_pass_url?: string;
+  // wallet_pass_url is now JSONB: {"apple": "...", "google": "..."}
+  wallet_pass_url?: { apple?: string; google?: string } | null;
   wishlist_status: WishlistStatus;
   item_data: Record<string, unknown>;
 }
@@ -95,9 +96,38 @@ export interface UserProfile {
   travelers: Record<string, unknown>[];
 }
 
+export interface Booking {
+  id: number;
+  item_id?: number;
+  user_id: number;
+  trip_id: number;
+  stripe_payment_intent_id?: string;
+  stripe_charge_id?: string;
+  amount_cents?: number;
+  currency?: string;
+  booking_ref?: string;
+  provider?: string;
+  created_at: string;
+  refunded_at?: string;
+}
+
 export type SSEEvent =
   | { type: "text"; content: string }
   | { type: "tool_use"; tool: string; id: string }
   | { type: "tool_result"; tool: string; result: unknown }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | {
+      type: "booking_intent";
+      item: ItineraryItem;
+      price_cents: number;
+      currency: string;
+      breakdown: Record<string, number>;
+    }
+  | { type: "booking_started" }
+  | {
+      type: "booking_complete";
+      success: boolean;
+      booking_ref?: string;
+      error?: string;
+    };

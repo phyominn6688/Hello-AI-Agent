@@ -18,13 +18,18 @@ from sqlalchemy.orm import selectinload
 
 from app.agent.mcp import (
     amadeus,
+    amadeus_booking,
+    audit,
     calendar,
+    delegate_booking,
     directions,
     opentable,
+    reservation_booking,
     ticketmaster,
     wallet,
     weather,
     tripdotcom,
+    wishlist,
 )
 from app.agent.prompts import GUIDE_SYSTEM_PROMPT, PLANNING_SYSTEM_PROMPT
 from app.config import settings
@@ -55,13 +60,20 @@ PLANNING_TOOLS = (
     + calendar.get_tools()
     + wallet.get_tools()
     + tripdotcom.get_tools()
+    + wishlist.get_tools()
+    + delegate_booking.get_tools()
+    + reservation_booking.get_tools()
 )
 
-# Guide mode adds real-time location tools
-GUIDE_TOOLS = PLANNING_TOOLS + directions.get_tools()
+# Guide mode adds real-time location tools, flight alternatives, and booking confirmation
+GUIDE_TOOLS = (
+    PLANNING_TOOLS
+    + directions.get_tools()
+    + amadeus_booking.get_tools()  # select_flight_alternative, confirm_flight_booking
+)
 
 TOOL_DISPATCH = {
-    # Amadeus
+    # Amadeus — search
     "search_flights": amadeus,
     "search_hotels": amadeus,
     # OpenTable / restaurants
@@ -83,6 +95,19 @@ TOOL_DISPATCH = {
     "get_directions": directions,
     "search_nearby": directions,
     "get_wait_times": directions,
+    # Wishlist
+    "add_to_wishlist": wishlist,
+    "get_wishlist": wishlist,
+    # Booking delegation (main agent → sub-agent)
+    "delegate_booking": delegate_booking,
+    # Restaurant booking deep links
+    "get_restaurant_booking_link": reservation_booking,
+    "confirm_restaurant_booking": reservation_booking,
+    # Flight alternatives + confirmation (guide mode)
+    "select_flight_alternative": amadeus_booking,
+    "confirm_flight_booking": amadeus_booking,
+    # Audit log
+    "log_booking_action": audit,
 }
 
 
@@ -226,6 +251,11 @@ async def chat_stream(
     system_prompt = await _build_system_prompt(trip, db)
     tools = GUIDE_TOOLS if trip.status == TripStatus.active else PLANNING_TOOLS
 
+    # Resolve user_id once for write-enabled tools that require ownership checks
+    user_id_result = await db.execute(select(User).where(User.id == trip.user_id))
+    _user = user_id_result.scalar_one_or_none()
+    user_id = _user.id if _user else 0
+
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Build full message list including the new user message.
@@ -325,6 +355,16 @@ async def chat_stream(
             break
 
         # Execute all tools and build tool_results message
+        # Some tools (write-enabled MCP wrappers) require db + user_id;
+        # legacy read-only tools only need (tool_name, tool_input).
+        _DB_USER_TOOLS = {
+            "add_to_wishlist", "get_wishlist",
+            "delegate_booking",
+            "get_restaurant_booking_link", "confirm_restaurant_booking",
+            "book_hotel", "select_flight_alternative", "confirm_flight_booking",
+            "log_booking_action",
+        }
+
         tool_results = []
         for tool_block in tool_use_blocks:
             tool_name = tool_block["name"]
@@ -334,7 +374,19 @@ async def chat_stream(
             module = TOOL_DISPATCH.get(tool_name)
             if module:
                 try:
-                    result_data = await module.execute_tool(tool_name, tool_input)
+                    if tool_name == "delegate_booking":
+                        yield _sse({"type": "booking_started"})
+                        result_data = await module.execute_tool(tool_name, tool_input, db, user_id)
+                        yield _sse({
+                            "type": "booking_complete",
+                            "success": result_data.get("status") == "confirmed",
+                            "booking_ref": result_data.get("booking_ref"),
+                            "error": result_data.get("error"),
+                        })
+                    elif tool_name in _DB_USER_TOOLS:
+                        result_data = await module.execute_tool(tool_name, tool_input, db, user_id)
+                    else:
+                        result_data = await module.execute_tool(tool_name, tool_input)
                 except Exception as e:
                     logger.exception("Tool %s failed", tool_name)
                     result_data = {"error": str(e)}

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.database import Base
 
 
+
 class ItemType(str, Enum):
     flight = "flight"
     hotel = "hotel"
@@ -67,7 +68,8 @@ class ItineraryItem(Base):
     booking_ref: Mapped[str | None] = mapped_column(String(128))
     booking_status: Mapped[str | None] = mapped_column(String(64))
     confirmation_doc_url: Mapped[str | None] = mapped_column(Text)  # S3 URL
-    wallet_pass_url: Mapped[str | None] = mapped_column(Text)       # Apple/Google pass
+    # {"apple": "https://...", "google": "https://..."} — populated by wallet_worker
+    wallet_pass_url: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     wishlist_status: Mapped[WishlistStatus] = mapped_column(
         String(32), default=WishlistStatus.wishlist
@@ -95,10 +97,20 @@ class AgentAction(Base):
     item_id: Mapped[int | None] = mapped_column(ForeignKey("itinerary_items.id"))
     action_type: Mapped[str] = mapped_column(
         String(32)
-    )  # cancel | rebook | modify | notify
+    )  # cancel | rebook | modify | notify | book_hotel | book_flight | etc.
     reason: Mapped[str] = mapped_column(Text)
     outcome: Mapped[str | None] = mapped_column(Text)
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Iteration 3 additions — booking sub-agent audit fields
+    agent_type: Mapped[str] = mapped_column(String(32), default="main")
+    tool_name: Mapped[str | None] = mapped_column(String(128))
+    input_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    output_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(32), default="success")
+    booking_token_hash: Mapped[str | None] = mapped_column(String(64))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

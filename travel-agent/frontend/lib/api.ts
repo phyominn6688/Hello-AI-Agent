@@ -46,6 +46,14 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}`);
+}
+
 // ── Trips ──────────────────────────────────────────────────────────────────────
 
 export const listTrips = () => get<Trip[]>("/api/v1/trips");
@@ -148,9 +156,65 @@ export const updateUserProfile = (body: Partial<import("@/types").UserProfile>) 
 export const exportData = () => get<unknown>("/api/v1/users/me/export");
 
 export async function deleteAccount(): Promise<void> {
-  const res = await fetch(`${API_URL}/api/v1/users/me`, {
-    method: "DELETE",
-    headers: { ...(await authHeaders()) },
-  });
-  if (!res.ok) throw new Error(`DELETE /api/v1/users/me → ${res.status}`);
+  await del("/api/v1/users/me");
 }
+
+// ── Wishlist ────────────────────────────────────────────────────────────────────
+
+export const getWishlist = (tripId: number, params?: { type?: string; city?: string }) => {
+  const qs = params
+    ? "?" + new URLSearchParams(Object.entries(params).filter(([, v]) => v != null) as [string, string][]).toString()
+    : "";
+  return get<import("@/types").ItineraryItem[]>(`/api/v1/trips/${tripId}/wishlist${qs}`);
+};
+
+export const promoteWishlistItem = (
+  tripId: number,
+  itemId: number,
+  date: string,
+  startTime?: string
+) =>
+  post<import("@/types").ItineraryItem>(
+    `/api/v1/trips/${tripId}/wishlist/${itemId}/promote`,
+    { date, start_time: startTime }
+  );
+
+export const removeWishlistItem = (tripId: number, itemId: number) =>
+  del(`/api/v1/trips/${tripId}/wishlist/${itemId}`);
+
+// ── Payments ────────────────────────────────────────────────────────────────────
+
+export const createSetupIntent = () =>
+  post<{ client_secret: string; customer_id: string }>("/api/v1/payments/setup-intent", {});
+
+export const confirmBooking = (body: {
+  item_id: number;
+  payment_method_id: string;
+  booking_type: string;
+  booking_payload?: Record<string, unknown>;
+}) =>
+  post<{ booking_token: string; payment_intent_id: string; client_secret: string }>(
+    "/api/v1/payments/confirm-booking",
+    body
+  );
+
+export const listPaymentMethods = () =>
+  get<
+    { id: string; brand: string; last4: string; exp_month: number; exp_year: number }[]
+  >("/api/v1/payments/methods");
+
+// ── Audit log ───────────────────────────────────────────────────────────────────
+
+export const getAuditLog = (
+  tripId: number,
+  params?: { status?: string; action_type?: string; page?: number; page_size?: number }
+) => {
+  const qs = params
+    ? "?" + new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)])
+      ).toString()
+    : "";
+  return get<unknown[]>(`/api/v1/trips/${tripId}/audit-log${qs}`);
+};

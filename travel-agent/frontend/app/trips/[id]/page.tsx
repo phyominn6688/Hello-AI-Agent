@@ -92,9 +92,10 @@ export default function TripPage() {
             return updated;
           });
         } else if (event.type === "done") {
-          // Refresh itinerary in case agent added items
+          // Refresh itinerary in case agent added/booked items
           getItinerary(tripId).then(setItinerary).catch(console.error);
         }
+        // booking_intent, booking_started, booking_complete are handled by ChatWindow
       }
     } catch (e) {
       console.error("Stream error:", e);
