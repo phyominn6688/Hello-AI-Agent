@@ -120,7 +120,12 @@ See [`travel-agent-infra/README.md`](travel-agent-infra/README.md) for prerequis
 | `get_directions` | Google Maps Directions API | Guide |
 | `search_nearby` | Google Maps Places API | Guide |
 | `get_wait_times` | Google Maps + mock | Guide |
-| `cancel_booking` / `modify_booking` | Amadeus (write) | Guide (Iteration 3) |
+| `add_to_wishlist` / `get_wishlist` | Internal DB | Both |
+| `book_hotel` | Amadeus write + Stripe | Both |
+| `select_flight_alternative` | Amadeus read | Guide |
+| `confirm_flight_booking` / `confirm_restaurant_booking` | Internal DB + Google Calendar | Both |
+| `get_restaurant_booking_link` | OpenTable deep-link | Both |
+| `delegate_booking` | Booking Sub-Agent | Both |
 
 Adding a new tool: create a module in `backend/app/agent/mcp/` with `get_tools()` and `execute_tool()`, then register it in `travel_agent.py`. See [`travel-agent/README.md`](travel-agent/README.md) for details.
 
@@ -139,4 +144,4 @@ Adding a new tool: create a module in `backend/app/agent/mcp/` with `get_tools()
 |---|---|
 | ✅ Iteration 1 | Planning loop · Cognito auth (Google) · Visa/entry checks · Availability · Flight + hotel search · Calendar sync · Desktop chat UI |
 | ✅ Iteration 2 | Guide mode · Morning briefing · Push notifications (SNS) · Dynamic replanning with trade-off UI · Leave-now alerts · PWA geolocation · Flight monitoring · Security hardening · GDPR endpoints |
-| 🔜 Iteration 3 | Real write bookings · Autonomous actions + audit log · Apple/Google Wallet · Booking Sub-Agent |
+| ✅ Iteration 3 | Hotel booking (Amadeus + Stripe) · Flight/restaurant deep-link handoff · Booking Sub-Agent · Wishlist + backup plan · Apple/Google Wallet passes · Audit log · Proactive rebooking with alternatives · Payment API |
