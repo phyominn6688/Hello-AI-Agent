@@ -8,29 +8,111 @@ This repo contains only infrastructure code. Business logic lives in [`travel-ag
 
 ## Architecture
 
-```
-                        CloudFront
-                            │
-              ┌─────────────┴─────────────┐
-         Amplify (Next.js)          API Gateway
-                                         │
-                                        ALB
-                                         │
-                              ECS Fargate (FastAPI)
-                              [auto-scaling, stateless]
-                                   │          │
-                              Aurora PG    ElastiCache
-                              Serverless    Redis Cluster
-                              v2 + Proxy
-                                   │
-                         ┌─────────┴──────────┐
-                        SQS                   S3
-                         │
-              ECS Workers / Lambda
-              - Flight change monitoring (Amadeus v2)
-              - Push notifications (SNS)
-              - Morning briefing + leave-now alerts
-              - Wallet pass generation (Iteration 3)
+```mermaid
+graph TB
+    %% ── External ──────────────────────────────────────────────────────────────
+    User(["👤 User\n(Browser / PWA)"])
+    ExtAPIs(["🌐 External APIs\nAmadeus · OpenWeather\nGoogle Maps · Ticketmaster"])
+    Anthropic(["🤖 Anthropic API\nClaude claude-sonnet-4-6"])
+
+    %% ── Auth Stack ────────────────────────────────────────────────────────────
+    subgraph AuthStack["🔐 Auth Stack"]
+        Cognito["Cognito User Pool\n+ Google IdP\n(PKCE / OAuth2)"]
+    end
+
+    %% ── Storage Stack ─────────────────────────────────────────────────────────
+    subgraph StorageStack["🗄️ Storage Stack"]
+        CF["CloudFront\nHTTP2+3 · TLS 1.2+\nPrice Class 100"]
+        FEBucket["S3\nFrontend Assets\n(Next.js static)"]
+        DocBucket["S3\nDocuments & Tickets\n(versioned in prod)"]
+        CF -->|"OAC"| FEBucket
+    end
+
+    %% ── VPC boundary ──────────────────────────────────────────────────────────
+    subgraph VPC["🌐 VPC  10.0.0.0/16  (Network Stack)"]
+
+        subgraph PublicSubnets["Public Subnets  /24  ×  maxAzs"]
+            ALB["Application\nLoad Balancer\n(internet-facing)"]
+            NAT["NAT Gateway\n(1 dev · maxAzs prod)"]
+        end
+
+        subgraph PrivateSubnets["Private Subnets  /24  ×  maxAzs  (egress via NAT)"]
+            subgraph ComputeStack["⚙️ Compute Stack"]
+                ECS["ECS Fargate\nFastAPI Backend\nARM64 · auto-scale 1→20"]
+            end
+            subgraph AsyncStack["⚡ Async Stack"]
+                FlightWorker["ECS Fargate\nFlight Monitor\nWorker"]
+                NotifyWorker["ECS Fargate\nNotifier\nWorker"]
+            end
+        end
+
+        subgraph IsolatedSubnets["Isolated Subnets  /24  ×  maxAzs  (no internet)"]
+            subgraph DataStack["💾 Data Stack"]
+                Proxy["RDS Proxy\n(connection pooling\nTLS required)"]
+                Aurora["Aurora PostgreSQL\nServerless v2\n0.5→64 ACU"]
+                Redis["ElastiCache Redis\n7.1 Cluster Mode\nTLS + Auth Token"]
+                Proxy --> Aurora
+            end
+        end
+
+        %% SG rules (dashed = security group boundary)
+        ALB -. "SG: 8000" .-> ECS
+        ECS -. "SG: 5432" .-> Proxy
+        ECS -. "SG: 6379" .-> Redis
+        FlightWorker -. "SG: 5432" .-> Proxy
+        FlightWorker -. "SG: 6379" .-> Redis
+        NotifyWorker -. "SG: 5432" .-> Proxy
+    end
+
+    %% ── Async messaging ───────────────────────────────────────────────────────
+    subgraph AsyncMessaging["📨 Async Messaging (Async Stack)"]
+        MainQueue["SQS\nMain Queue\n(KMS · DLQ · 300s vis)"]
+        NotifQueue["SQS\nNotification Queue\n(KMS · DLQ · 60s vis)"]
+        DLQ["SQS\nDead Letter Queue\n(14 day retention)"]
+        SNSTopic["SNS Topic\nPush Notifications"]
+        MainQueue -->|"maxReceiveCount=3"| DLQ
+        NotifQueue -->|"maxReceiveCount=3"| DLQ
+        SNSTopic -->|"subscription"| NotifQueue
+    end
+
+    %% ── Secrets ───────────────────────────────────────────────────────────────
+    subgraph Secrets["🔑 Secrets & Config"]
+        SM["Secrets Manager\nDB credentials\nRedis auth token"]
+        SSM["SSM Parameter Store\nAnthropic API key\nGoogle OAuth secrets"]
+    end
+
+    %% ── Flow ──────────────────────────────────────────────────────────────────
+    User -->|"HTTPS"| CF
+    User -->|"HTTPS /api/*"| CF
+    CF -->|"HTTPS /api/*\n(origin: ALB)"| ALB
+    User <-->|"OAuth2 PKCE"| Cognito
+    ECS -->|"JWT validation\n(JWKS)"| Cognito
+    ECS --> DocBucket
+    ECS -->|"send jobs"| MainQueue
+    ECS <-->|"Claude API"| Anthropic
+    ECS <-->|"flight/weather/maps"| ExtAPIs
+    FlightWorker -->|"poll"| MainQueue
+    FlightWorker <-->|"Amadeus v2"| ExtAPIs
+    FlightWorker -->|"publish"| SNSTopic
+    NotifyWorker -->|"poll"| NotifQueue
+    ECS --> SM
+    ECS --> SSM
+    FlightWorker --> SM
+    NotifyWorker --> SM
+
+    %% ── Styles ────────────────────────────────────────────────────────────────
+    classDef aws fill:#FF9900,stroke:#232F3E,color:#232F3E,font-weight:bold
+    classDef external fill:#6B7280,stroke:#374151,color:#fff
+    classDef queue fill:#9B59B6,stroke:#6C3483,color:#fff
+    classDef storage fill:#3498DB,stroke:#1A5276,color:#fff
+    classDef compute fill:#27AE60,stroke:#1E8449,color:#fff
+    classDef security fill:#E74C3C,stroke:#922B21,color:#fff
+
+    class ALB,ECS,FlightWorker,NotifyWorker,Proxy,Aurora,Redis,CF,Cognito aws
+    class User,ExtAPIs,Anthropic external
+    class MainQueue,NotifQueue,DLQ,SNSTopic queue
+    class FEBucket,DocBucket storage
+    class SM,SSM security
 ```
 
 ### Scale path (no re-architecture needed)

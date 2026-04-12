@@ -7,6 +7,7 @@ import type { EnvConfig } from "../config/types";
 
 interface Props extends cdk.StackProps {
   config: EnvConfig;
+  albDnsName?: string; // Set after compute stack deploys; omit on first deploy
 }
 
 export class StorageStack extends cdk.Stack {
@@ -15,6 +16,7 @@ export class StorageStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
     const { config } = props;
+    const albDnsName = props.albDnsName ?? "api-placeholder.invalid";
 
     // ── Document / ticket storage ──────────────────────────────────────────────
 
@@ -70,7 +72,7 @@ export class StorageStack extends cdk.Stack {
       additionalBehaviors: {
         // API requests bypass cache → ALB origin (set endpoint after compute stack)
         "/api/*": {
-          origin: new origins.HttpOrigin("api-placeholder.example.com"),
+          origin: new origins.HttpOrigin(albDnsName),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,

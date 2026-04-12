@@ -15,6 +15,7 @@ interface Props extends cdk.StackProps {
 
 export class DataStack extends cdk.Stack {
   readonly dbSecret: secretsmanager.Secret;
+  readonly redisAuthSecret: secretsmanager.Secret;
   readonly proxyEndpoint: string;
   readonly redisEndpoint: string;
 
@@ -91,6 +92,14 @@ export class DataStack extends cdk.Stack {
       }).subnetIds,
     });
 
+    const redisAuthToken = new secretsmanager.Secret(this, "RedisAuthToken", {
+      secretName: `/travel-agent/${config.env}/redis-auth-token`,
+      generateSecretString: {
+        excludePunctuation: true,
+        passwordLength: 32,
+      },
+    });
+
     const redisCluster = new elasticache.CfnReplicationGroup(this, "Redis", {
       replicationGroupDescription: `travel-agent-${config.env}`,
       clusterMode: "enabled",
@@ -103,12 +112,15 @@ export class DataStack extends cdk.Stack {
       securityGroupIds: [cacheSecurityGroup.securityGroupId],
       atRestEncryptionEnabled: true,
       transitEncryptionEnabled: true,
+      transitEncryptionMode: "required",
+      authToken: redisAuthToken.secretValueFromJson("password").unsafeUnwrap(),
       automaticFailoverEnabled: config.redisNumShards > 1 || config.redisReplicasPerShard > 0,
       multiAzEnabled: config.maxAzs > 1,
       snapshotRetentionLimit: config.env === "prod" ? 5 : 1,
     });
 
     this.redisEndpoint = `${redisCluster.attrConfigurationEndPointAddress}:${redisCluster.attrConfigurationEndPointPort}`;
+    this.redisAuthSecret = redisAuthToken;
 
     // ── Outputs ────────────────────────────────────────────────────────────────
 
