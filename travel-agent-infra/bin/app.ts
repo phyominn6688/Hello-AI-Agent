@@ -39,6 +39,8 @@ const dataStack = new DataStack(app, `${stackPrefix}-Data`, {
 });
 
 // Stack 4: S3 + CloudFront
+// Note: albDnsName is set after first compute deploy (two-pass pattern).
+// On first deploy omit it; update after ComputeStack outputs the ALB DNS.
 const storageStack = new StorageStack(app, `${stackPrefix}-Storage`, { env, config });
 
 // Stack 5: ECS Fargate backend + ALB

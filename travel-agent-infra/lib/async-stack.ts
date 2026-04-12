@@ -104,7 +104,7 @@ export class AsyncStack extends cdk.Stack {
 
     const logGroup = new logs.LogGroup(this, "WorkerLogs", {
       logGroupName: `/ecs/travel-agent-${config.env}/workers`,
-      retention: logs.RetentionDays.ONE_WEEK,
+      retention: config.env === "prod" ? logs.RetentionDays.ONE_MONTH : logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 

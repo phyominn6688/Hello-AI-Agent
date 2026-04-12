@@ -27,7 +27,7 @@ export class NetworkStack extends cdk.Stack {
         { name: "Private", subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 24 },
         { name: "Isolated", subnetType: ec2.SubnetType.PRIVATE_ISOLATED, cidrMask: 24 },
       ],
-      natGateways: config.maxAzs, // 1 NAT GW per AZ for true HA; reduce to 1 for dev cost savings
+      natGateways: config.env === "prod" ? config.maxAzs : 1, // 1 NAT GW per AZ in prod for HA; 1 in dev to save ~$65/mo
       enableDnsHostnames: true,
       enableDnsSupport: true,
     });

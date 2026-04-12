@@ -144,12 +144,17 @@ export class ComputeStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
     });
 
-    const listener = this.alb.addListener("HttpsListener", {
-      port: 443,
-      protocol: elbv2.ApplicationProtocol.HTTPS,
-      // Certificate added in prod; dev uses HTTP
+    // HTTP listener — redirects to HTTPS in prod, serves directly in dev
+    const httpListener = this.alb.addListener("HttpListener", {
+      port: 80,
+      protocol: elbv2.ApplicationProtocol.HTTP,
       open: true,
+      defaultAction: config.env === "prod"
+        ? elbv2.ListenerAction.redirect({ protocol: "HTTPS", port: "443", permanent: true })
+        : elbv2.ListenerAction.forward([]), // targets added below
     });
+
+    const activeListener = httpListener;
 
     // ── ECS Service ────────────────────────────────────────────────────────────
 
@@ -166,7 +171,7 @@ export class ComputeStack extends cdk.Stack {
       deploymentController: { type: ecs.DeploymentControllerType.ECS },
     });
 
-    listener.addTargets("BackendTargets", {
+    activeListener.addTargets("BackendTargets", {
       port: 8000,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service],
@@ -192,12 +197,10 @@ export class ComputeStack extends cdk.Stack {
       scaleOutCooldown: cdk.Duration.seconds(30),
     });
 
-    scaling.scaleOnRequestCount("RequestScaling", {
-      requestsPerTarget: 500,
-      targetGroup: listener.addTargets("ScalingTarget", {
-        port: 8000,
-        targets: [],
-      }) as elbv2.ApplicationTargetGroup,
+    scaling.scaleOnMemoryUtilization("MemoryScaling", {
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(60),
+      scaleOutCooldown: cdk.Duration.seconds(30),
     });
 
     // ── Outputs ────────────────────────────────────────────────────────────────
